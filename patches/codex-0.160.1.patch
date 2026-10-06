@@ -1,0 +1,317 @@
+diff --git a/codex-rs/tui/src/app/owned_transcript.rs b/codex-rs/tui/src/app/owned_transcript.rs
+index 23d40daaa..ba70c991b 100644
+--- a/codex-rs/tui/src/app/owned_transcript.rs
++++ b/codex-rs/tui/src/app/owned_transcript.rs
+@@ -134,6 +134,13 @@ impl App {
+         };
+         drop(bottom);
+         let available = screen_size.height.saturating_sub(bottom_height);
++        let rain = (self.local_settings.tui.animations
++            && !dashboard_visible
++            && transcript_width > 0
++            && available > 0)
++            .then(crate::matrix_rain::output_rain)
++            .flatten();
++        view.mark_empty_output_cells(rain.is_some());
+         let mut bottom_area = Rect::new(
+             /*x*/ 0,
+             screen_size.height.saturating_sub(bottom_height),
+@@ -253,6 +260,22 @@ impl App {
+             .filter(|_| chat_widget.no_modal_or_popup_active());
+             feedback_tick =
+                 view.render_composer_gap(follow_area, composer_hint.as_ref(), frame.buffer, now);
++            if let Some(rain) = rain {
++                let excluded = [
++                    follow_area.unwrap_or_default(),
++                    completion_tip_area.unwrap_or_default(),
++                ];
++                rain.render(
++                    Rect::new(
++                        /*x*/ 0,
++                        /*y*/ 0,
++                        transcript_width,
++                        transcript_bottom,
++                    ),
++                    frame.buffer,
++                    &excluded,
++                );
++            }
+             chat_widget.note_rendered_width(screen_size.width);
+             rendered_cursor = bottom.cursor_pos(bottom_area);
+             if let Some(position) = rendered_cursor {
+@@ -260,6 +283,10 @@ impl App {
+                 frame.set_cursor_position(position);
+             }
+         })?;
++        if rain.is_some() && transcript_bottom > 0 {
++            tui.frame_requester()
++                .schedule_frame_in(crate::matrix_rain::FRAME_INTERVAL);
++        }
+         if let Some((surface, tip)) = &turn_tip
+             && tip.rendered.get()
+         {
+diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
+index 2697cbabd..3eb0cf521 100644
+--- a/codex-rs/tui/src/lib.rs
++++ b/codex-rs/tui/src/lib.rs
+@@ -129,6 +129,7 @@ pub(crate) mod custom_terminal;
+ mod daybreak;
+ mod experimental_features;
+ mod markdown_copy;
++mod matrix_rain;
+ mod permission_discovery;
+ mod pets;
+ mod security_setup;
+diff --git a/codex-rs/tui/src/transcript_view.rs b/codex-rs/tui/src/transcript_view.rs
+index f565f3a7d..d393c8375 100644
+--- a/codex-rs/tui/src/transcript_view.rs
++++ b/codex-rs/tui/src/transcript_view.rs
+@@ -113,6 +113,7 @@ pub(crate) struct TranscriptView {
+     last_tail: Option<EntryKey>,
+     last_click: Option<(std::time::Instant, u16, u16, u8)>,
+     disclosure: disclosure::Disclosure,
++    mark_empty_output_cells: bool,
+ }
+ 
+ impl Default for TranscriptView {
+@@ -146,11 +147,16 @@ impl Default for TranscriptView {
+             last_tail: None,
+             last_click: None,
+             disclosure: disclosure::Disclosure::default(),
++            mark_empty_output_cells: false,
+         }
+     }
+ }
+ 
+ impl TranscriptView {
++    pub(crate) fn mark_empty_output_cells(&mut self, enabled: bool) {
++        self.mark_empty_output_cells = enabled;
++    }
++
+     /// Rows left after the last render, including all startup notices and live entries.
+     /// Callers can paint temporary UI here without changing selection or saved history.
+     pub(crate) fn remaining_area(&self) -> Rect {
+@@ -173,6 +179,17 @@ impl TranscriptView {
+         let cells = snapshot.as_deref().unwrap_or(cells);
+         let suppressed_prompt_header = self.suppressed_prompt_header.take();
+         Clear.render(area, buf);
++        if self.mark_empty_output_cells {
++            // Text rendering replaces these symbols, including literal spaces and wide-glyph
++            // continuation cells. The owned frame consumes every survivor before flushing.
++            for y in area.top()..area.bottom() {
++                for x in area.left()..area.right() {
++                    if let Some(cell) = buf.cell_mut((x, y)) {
++                        cell.set_symbol(crate::matrix_rain::EMPTY_OUTPUT_CELL);
++                    }
++                }
++            }
++        }
+         self.prepare_width(area.width);
+         self.area = area;
+         self.normalize_selection(cells);
+diff --git a/codex-rs/tui/src/transcript_view/text.rs b/codex-rs/tui/src/transcript_view/text.rs
+index 44877552c..64c8bd374 100644
+--- a/codex-rs/tui/src/transcript_view/text.rs
++++ b/codex-rs/tui/src/transcript_view/text.rs
+@@ -16,6 +16,7 @@ mod logical;
+ mod tabs;
+ 
+ use ratatui::buffer::Buffer;
++use ratatui::buffer::CellWidth;
+ use ratatui::layout::Alignment;
+ use ratatui::layout::Rect;
+ use ratatui::style::Modifier;
+@@ -234,10 +235,37 @@ impl TextLayout {
+         for (screen_row, row) in self.visible_rows(area, start_row) {
+             let mut row_area =
+                 Rect::new(area.x, area.y + screen_row, area.width, /*height*/ 1);
++            let marked = row_area.width > 0
++                && buf
++                    .cell((row_area.x, row_area.y))
++                    .is_some_and(|cell| cell.symbol() == crate::matrix_rain::EMPTY_OUTPUT_CELL);
+             buf.set_style(row_area, row.line.line.style);
+             row_area.width = row.content_width;
+             HyperlinkParagraph::new(std::slice::from_ref(&row.line), row.line.line.style)
+                 .render(row_area, buf);
++            if marked {
++                // HyperlinkParagraph advances by the width of a wide glyph without writing its
++                // continuation cell. Clear only the untouched marker; keep the lead cell intact.
++                let mut x = row_area.left();
++                while x < row_area.right() {
++                    let Some(cell) = buf.cell((x, row_area.y)) else {
++                        break;
++                    };
++                    let width = cell.cell_width().max(1);
++                    if cell.symbol() != crate::matrix_rain::EMPTY_OUTPUT_CELL && width > 1 {
++                        for continuation in
++                            x.saturating_add(1)..x.saturating_add(width).min(row_area.right())
++                        {
++                            if let Some(cell) = buf.cell_mut((continuation, row_area.y))
++                                && cell.symbol() == crate::matrix_rain::EMPTY_OUTPUT_CELL
++                            {
++                                cell.set_symbol(" ");
++                            }
++                        }
++                    }
++                    x = x.saturating_add(width);
++                }
++            }
+         }
+     }
+ 
+diff --git a/codex-rs/tui/src/transcript_view_tests.rs b/codex-rs/tui/src/transcript_view_tests.rs
+index 8492e227b..e46feffda 100644
+--- a/codex-rs/tui/src/transcript_view_tests.rs
++++ b/codex-rs/tui/src/transcript_view_tests.rs
+@@ -63,6 +63,151 @@ pub(super) fn text(buffer: &Buffer) -> String {
+         .join("\n")
+ }
+ 
++#[test]
++fn matrix_rain_marks_only_unwritten_output_and_keeps_copy_selection() {
++    use crate::matrix_rain::EMPTY_OUTPUT_CELL;
++    use crate::matrix_rain::MatrixRain;
++    use ratatui::style::Modifier;
++
++    let cells = vec![cell("A \t漢 B")];
++    let area = Rect::new(0, 0, 24, 4);
++    let mut view = TranscriptView::default();
++    view.mark_empty_output_cells(true);
++    let mut buf = Buffer::empty(area);
++    view.render(area, &mut buf, &cells);
++    let han = (area.top()..area.bottom())
++        .flat_map(|y| (area.left()..area.right()).map(move |x| (x, y)))
++        .find(|&(x, y)| buf[(x, y)].symbol() == "漢")
++        .expect("wide output should be visible");
++    assert_eq!(buf[(han.0 + 1, han.1)].symbol(), " ");
++    assert_eq!(buf[(han.0 - 1, han.1)].symbol(), " ");
++    view.begin_selection(&cells, /*column*/ 0, han.1, /*clicks*/ 3);
++    let copied = view.selected_text(&cells);
++    assert!(copied.as_deref().is_some_and(|text| text.contains("漢")));
++    view.render(area, &mut buf, &cells);
++    MatrixRain::for_test().render(area, &mut buf, &[]);
++    assert_eq!(view.selected_text(&cells), copied);
++    assert_eq!(buf[(han.0 + 1, han.1)].symbol(), " ");
++    assert_eq!(buf[(han.0 - 1, han.1)].symbol(), " ");
++    assert!(
++        buf.content
++            .iter()
++            .all(|cell| cell.symbol() != EMPTY_OUTPUT_CELL)
++    );
++    assert!(
++        buf.content
++            .iter()
++            .any(|cell| cell.modifier.contains(Modifier::REVERSED))
++    );
++    view.mark_empty_output_cells(false);
++    view.render(area, &mut buf, &cells);
++    assert!(
++        buf.content
++            .iter()
++            .all(|cell| cell.symbol() != EMPTY_OUTPUT_CELL)
++    );
++}
++
++#[test]
++fn matrix_rain_output_clips_tiny_views_and_consumes_resize_sentinels() {
++    use crate::matrix_rain::EMPTY_OUTPUT_CELL;
++    use crate::matrix_rain::MatrixRain;
++    use ratatui::widgets::Clear;
++    use ratatui::widgets::Widget;
++
++    let cells = vec![cell("漢 a\ttext")];
++    let rain = MatrixRain::for_test();
++    for width in [0, 1] {
++        for height in 0..=4 {
++            let area = Rect::new(0, 0, width, height);
++            let mut buf = Buffer::empty(area);
++            let mut view = TranscriptView::default();
++            view.mark_empty_output_cells(true);
++            view.render(area, &mut buf, &cells);
++            let occupied = buf
++                .content
++                .iter()
++                .filter(|cell| cell.symbol() != EMPTY_OUTPUT_CELL)
++                .map(|cell| cell.symbol().to_owned())
++                .collect::<Vec<_>>();
++            rain.render(area, &mut buf, &[]);
++            assert!(
++                buf.content
++                    .iter()
++                    .all(|cell| cell.symbol() != EMPTY_OUTPUT_CELL)
++            );
++            for symbol in occupied {
++                assert!(buf.content.iter().any(|cell| cell.symbol() == symbol));
++            }
++        }
++    }
++
++    let full = Rect::new(0, 0, 12, 6);
++    let short = Rect::new(0, 0, 12, 3);
++    let mut buf = Buffer::empty(full);
++    let mut view = TranscriptView::default();
++    view.mark_empty_output_cells(true);
++    view.render(full, &mut buf, &cells);
++    Clear.render(Rect::new(0, 3, 12, 3), &mut buf);
++    view.render(short, &mut buf, &cells);
++    rain.render(short, &mut buf, &[]);
++    assert!(
++        buf.content
++            .iter()
++            .all(|cell| cell.symbol() != EMPTY_OUTPUT_CELL)
++    );
++}
++
++#[test]
++#[ignore = "manual render cost probe; run separately from the native build"]
++fn matrix_rain_output_render_performance() {
++    use crate::matrix_rain::MatrixRain;
++
++    let cells = (0..1000)
++        .map(|index| cell(format!("{index:04}  결과 漢字 tab\tcode()  answer text")))
++        .collect::<Vec<_>>();
++    let rain = MatrixRain::for_test();
++    for (width, height) in [(120, 40), (240, 80)] {
++        let area = Rect::new(0, 0, width, height);
++        let mut baseline = TranscriptView::default();
++        let mut animated = TranscriptView::default();
++        animated.mark_empty_output_cells(true);
++        let mut baseline_buf = Buffer::empty(area);
++        let mut animated_buf = Buffer::empty(area);
++        for _ in 0..5 {
++            baseline.render(area, &mut baseline_buf, &cells);
++            animated.render(area, &mut animated_buf, &cells);
++            rain.render(area, &mut animated_buf, &[]);
++        }
++        baseline.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 3);
++        animated.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 3);
++        assert_eq!(
++            baseline.selected_text(&cells),
++            animated.selected_text(&cells)
++        );
++        for (label, view, buf) in [
++            ("baseline", &mut baseline, &mut baseline_buf),
++            ("rain", &mut animated, &mut animated_buf),
++        ] {
++            let mut samples = Vec::with_capacity(200);
++            for _ in 0..200 {
++                let started = std::time::Instant::now();
++                view.render(area, buf, &cells);
++                if label == "rain" {
++                    rain.render(area, buf, &[]);
++                }
++                samples.push(started.elapsed().as_micros());
++            }
++            samples.sort_unstable();
++            let mean = samples.iter().sum::<u128>() / samples.len() as u128;
++            let p95 = samples[samples.len() * 95 / 100];
++            println!(
++                "matrix_rain_output_render_performance {width}x{height} {label}: mean={mean}us p95={p95}us"
++            );
++        }
++    }
++}
++
+ #[test]
+ fn terminal_output_disclosure_follows_live_history_and_keymap() {
+     use crate::exec_cell::CommandOutput;
