@@ -8,44 +8,38 @@
 - `CODEX_MATRIX_RAIN=1`과 TUI 애니메이션이 켜져 있어야 한다.
 - TrueColor 또는 ANSI 256색 터미널을 사용한다.
 - `--no-alt-screen`에서는 코드비를 표시하지 않는다.
-- `patches/codex-0.160.1.patch`와 `src/`의 두 Rust 파일을 함께 적용한다.
-- 새 Codex 버전에서는 해당 태그의 렌더 호출부와 패치 적용 여부를 확인한다.
+- 새 버전은 [공식 소스 포크](https://github.com/cloudnkim/codex)의 `matrix` 브랜치에서 관리한다.
+- 이 저장소의 `0.160.1` 패치와 소스는 최초 버전 기록으로 보존한다.
 
-## 소스 적용
+## 소스 받기
 
 이 폴더에서 실행한다.
 
 ```sh
-git clone --depth 1 --branch rust-v0.160.1 https://github.com/openai/codex.git .build/codex
-git -C .build/codex apply ../../patches/codex-0.160.1.patch
-cp src/matrix_rain.rs src/matrix_rain_tests.rs .build/codex/codex-rs/tui/src/
+git clone --branch matrix https://github.com/cloudnkim/codex.git .build/codex
 ```
 
 ## 빌드
 
-Codex 소스의 Rust `1.95.0` 툴체인을 사용한다.
+해당 소스의 `rust-toolchain.toml`에 고정된 Rust 툴체인을 사용한다.
 
 ```sh
 export PATH="$HOME/.cargo/bin:$PATH"
 cd .build/codex/codex-rs
-cargo build -p codex-cli --bin codex --release
+cargo build --locked --release -p codex-cli --bin codex
 CODEX_MATRIX_RAIN=1 ./target/release/codex
 ```
 
-독립 실행 패키지가 필요하면 Codex의 `just assemble-codex-package`에 빌드한 CLI와 해당 버전의 보조 실행 파일을 전달한다.
+새 공식 릴리즈의 macOS Apple Silicon 패키지는 [포크 릴리즈](https://github.com/cloudnkim/codex/releases)에 게시한다.
+패키지의 `bin/codex-matrix`로 효과를 켜고 기존 CLI 인자를 전달한다.
+예약·병합·실패 처리는 [포크의 자동 업데이트 문서](https://github.com/cloudnkim/codex/blob/matrix/matrix-rain.md)를 따른다.
 
 ## 검증
 
-Codex 소스 루트에서 관련 기존 테스트를 실행한다.
+CLI 버전이 포크의 `matrix-upstream-version.txt`와 일치하는지 확인한다.
 
 ```sh
-just test -p codex-tui -E 'test(matrix_rain) | test(transcript_view::text::)'
-```
-
-이 폴더에서 `pyte`가 설치된 Python으로 실제 터미널 검증을 실행한다.
-
-```sh
-python verify/validate-output-ui.py .build/codex/codex-rs/target/release/codex
+./target/release/codex --version
 ```
 
 효과 켜짐·꺼짐, 애니메이션 꺼짐, 일반 터미널 모드, 기본 모드를 확인한다.
@@ -54,5 +48,5 @@ python verify/validate-output-ui.py .build/codex/codex-rs/target/release/codex
 
 ## 보관
 
-원본 Codex 소스와 빌드 산출물은 `.build/`에 둔다.
-버전별 패치와 코드비 소스, 검증 도구, 라이선스를 함께 보관한다.
+포크 소스와 로컬 빌드 산출물은 `.build/`에 둔다.
+최초 버전의 패치·코드비 소스·라이선스는 이 저장소에 보존한다.
