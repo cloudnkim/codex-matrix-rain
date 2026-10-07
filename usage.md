@@ -32,6 +32,9 @@ CODEX_MATRIX_RAIN=1 ./target/release/codex
 
 새 공식 릴리즈의 macOS Apple Silicon 패키지는 [포크 릴리즈](https://github.com/cloudnkim/codex/releases)에 게시한다.
 패키지의 `bin/codex-matrix`로 효과를 켜고 기존 CLI 인자를 전달한다.
+다른 Apple Silicon 맥에서는 압축을 풀고 `sh ./install.command`로 설치한다.
+설치한 `~/.codex/bin/codex-matrix-X.Y.Z`를 실행한다.
+설치에는 Rust·Node.js·Python이 필요하지 않고 기존 Codex 설정·인증은 보존한다.
 예약·병합·실패 처리는 [포크의 자동 업데이트 문서](https://github.com/cloudnkim/codex/blob/matrix/matrix-rain.md)를 따른다.
 
 ## 검증

@@ -5,5 +5,6 @@
 - [공식 소스 포크·자동 업데이트](https://github.com/cloudnkim/codex)
 - [적용·빌드·실행 절차](usage.md)
 - [플랫폼 호환성](windows-compatibility.md)
+- [상태 표시 미리보기](previews/matrix-activity-standalone.html)
 - [검증 결과](verification.md)
 - 라이선스: [LICENSE](LICENSE), [NOTICE](NOTICE)

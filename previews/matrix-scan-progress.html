@@ -1,0 +1,226 @@
+<div id="matrix-scan-progress">
+  <div class="viz-controls" aria-label="스캔 펄스 상태 미리보기">
+    <button type="button" class="btn" data-state="working" aria-pressed="true">작업 중</button>
+    <button type="button" class="btn" data-state="thinking" aria-pressed="false">생각 중</button>
+    <button type="button" class="btn" data-state="complete" aria-pressed="false">완료</button>
+    <button type="button" class="btn" data-state="idle" aria-pressed="false">대기</button>
+  </div>
+  <div class="viz-dotted-background scan-stage">
+    <div class="scan-terminal">
+      <div class="scan-operation" data-operation aria-live="polite">Working…</div>
+      <div class="scan-input"><span aria-hidden="true">›</span><span class="scan-placeholder">메시지 입력</span></div>
+      <div class="scan-status">
+        <canvas class="scan-display" width="224" height="48" role="img" aria-label="부드러운 녹색 스캔이 움직이며 진행도에 따라 글자가 드러나는 상태 표시"></canvas>
+        <span class="scan-model">GPT-6.1-sol</span><span class="scan-effort">ultra</span>
+      </div>
+      <span class="scan-color-probe" aria-hidden="true"></span>
+    </div>
+  </div>
+  <div class="viz-controls" aria-label="진행도 미리보기">
+    <label class="form-check">
+      <input class="form-check-input" type="checkbox" data-known checked>
+      <span class="form-check-label">계획 단계 진행도 있음</span>
+    </label>
+    <label class="form-label" for="matrix-preview-progress">미리보기 진행도 <span data-percent>35%</span>
+      <input class="form-range" type="range" id="matrix-preview-progress" min="0" max="100" step="1" value="35">
+    </label>
+  </div>
+  <span class="sr-only" data-description aria-live="polite"></span>
+</div>
+<style>
+  #matrix-scan-progress .scan-stage { padding: 24px 0; margin: 12px 0; }
+  #matrix-scan-progress .scan-terminal {
+    --scan-surface: light-dark(#f4f5f1, #1c1e1c);
+    --scan-input: light-dark(#e6e9e3, #262a26);
+    --scan-ink: light-dark(#272f28, #d8dbd4);
+    --scan-muted: light-dark(#59675c, #9ca69d);
+    --scan-model: light-dark(#775a22, #e6cd94);
+    --scan-green: light-dark(#156938, #50e38c);
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 20px;
+    background: var(--scan-surface);
+    border-radius: 10px;
+    color: var(--scan-ink);
+    font: 14px/24px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    box-sizing: border-box;
+  }
+  #matrix-scan-progress .scan-operation { color: var(--scan-muted); min-height: 24px; margin-bottom: 12px; padding-inline: 10px; }
+  #matrix-scan-progress .scan-input { display: flex; gap: 13px; padding: 5px 10px; background: var(--scan-input); border-radius: 4px; }
+  #matrix-scan-progress .scan-placeholder { color: var(--scan-muted); }
+  #matrix-scan-progress .scan-status { display: grid; grid-template-columns: 112px max-content max-content; align-items: center; column-gap: 12px; min-height: 24px; margin-top: 8px; white-space: nowrap; }
+  #matrix-scan-progress .scan-display { display: block; width: 112px; height: 24px; }
+  #matrix-scan-progress .scan-model { color: var(--scan-model); }
+  #matrix-scan-progress .scan-effort { color: var(--scan-muted); }
+  #matrix-scan-progress .scan-color-probe { position: absolute; width: 0; height: 0; color: var(--scan-green); }
+  @media (max-width: 440px) {
+    #matrix-scan-progress .scan-terminal { padding: 16px 10px; }
+  }
+</style>
+<script>
+(() => {
+  const root = document.getElementById("matrix-scan-progress");
+  if (!root) return;
+  const canvas = root.querySelector("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  const terminal = root.querySelector(".scan-terminal");
+  const probe = root.querySelector(".scan-color-probe");
+  const controls = Array.from(root.querySelectorAll("[data-state]"));
+  const operation = root.querySelector("[data-operation]");
+  const slider = root.querySelector("#matrix-preview-progress");
+  const percent = root.querySelector("[data-percent]");
+  const known = root.querySelector("[data-known]");
+  const description = root.querySelector("[data-description]");
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const theme = window.matchMedia("(prefers-color-scheme: dark)");
+  const message = "CODEX ÉXITO";
+  const width = 112;
+  const height = 24;
+  const state = { activity: "working", progress: 35, known: true, period: 2.4 };
+  let shownProgress = state.progress;
+  let lastTime = 0;
+  let completeUntil = 0;
+  let colors;
+  let textLayout;
+
+  function readColors() {
+    const style = getComputedStyle(terminal);
+    colors = {
+      green: getComputedStyle(probe).color,
+      surface: style.backgroundColor,
+      ink: style.color
+    };
+    const font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    context.font = font;
+    const metrics = context.measureText("Mg");
+    const ascent = metrics.fontBoundingBoxAscent ?? metrics.actualBoundingBoxAscent;
+    const descent = metrics.fontBoundingBoxDescent ?? metrics.actualBoundingBoxDescent;
+    textLayout = { font, spacing: context.measureText("M").width, baseline: (height + ascent - descent) / 2 };
+  }
+
+  function renderState() {
+    const labels = { working: "Working…", thinking: "Thinking…", complete: "CODEX ÉXITO", idle: "CODEX READY" };
+    controls.forEach(button => button.setAttribute("aria-pressed", String(button.dataset.state === state.activity)));
+    operation.textContent = labels[state.activity];
+    slider.disabled = !state.known || state.activity === "complete" || state.activity === "idle";
+    percent.textContent = state.known ? `${state.progress}%` : "알 수 없음";
+    known.checked = state.known;
+    slider.value = String(state.progress);
+    description.textContent = state.activity === "idle" ? "CODEX READY: 다음 작업을 기다립니다." : state.activity === "complete" ? "성공 완료 문구를 3초 표시한 뒤 CODEX READY로 돌아갑니다." : state.known ? "확인된 계획 단계 진행도에 따라 문구가 드러납니다. 마지막 글자는 성공 완료 때 드러납니다." : "진행도를 알 수 없으면 스캔만 반복합니다.";
+    canvas.setAttribute("aria-label", description.textContent);
+  }
+
+  function setActivity(activity) {
+    state.activity = activity;
+    if (activity === "complete") {
+      state.progress = 100;
+      completeUntil = performance.now() + 3000;
+    } else {
+      completeUntil = 0;
+      if (activity === "idle") state.progress = 0;
+      else if (state.progress === 100 || state.progress === 0) state.progress = 35;
+    }
+    if (reducedMotion.matches) shownProgress = state.progress;
+    renderState();
+  }
+
+  function draw(timestamp) {
+    context.setTransform(2, 0, 0, 2, 0, 0);
+    context.clearRect(0, 0, width, height);
+    context.textBaseline = "alphabetic";
+    context.font = textLayout.font;
+    const caption = state.activity === "idle" ? "CODEX READY" : message;
+    const active = state.activity === "working" || state.activity === "thinking";
+    const revealed = active ? state.known ? Math.floor(shownProgress / 100 * (caption.length - 1)) : 0 : caption.length;
+    const phase = reducedMotion.matches ? 0.5 : timestamp / (state.period * 1000) % 1;
+    const spacing = textLayout.spacing;
+    const left = 10;
+    const textWidth = caption.length * spacing;
+    const beam = left + spacing / 2 + (textWidth - spacing) * (0.5 - 0.5 * Math.cos(phase * Math.PI * 2));
+    const direction = Math.sin(phase * Math.PI * 2) >= 0 ? 1 : -1;
+    context.save();
+    context.beginPath();
+    context.rect(left, 0, textWidth, height);
+    context.clip();
+
+    if (active) {
+      context.fillStyle = colors.green;
+      context.globalAlpha = 0.12;
+      for (let index = 0; index < caption.length; index++) {
+        if (caption[index] !== " ") context.fillRect(left + (index + 0.5) * spacing - 1, 21, 2, 1);
+      }
+      context.globalAlpha = 1;
+      const trail = context.createLinearGradient(beam - direction * 20, 0, beam, 0);
+      trail.addColorStop(0, "transparent");
+      trail.addColorStop(1, colors.green);
+      context.fillStyle = trail;
+      context.globalAlpha = 0.22;
+      context.fillRect(Math.min(beam, beam - direction * 20), 5, 20, 13);
+      context.globalAlpha = 1;
+    }
+
+    for (let index = 0; index < caption.length; index++) {
+      const x = left + index * spacing;
+      const confirmed = index < revealed;
+      if (caption[index] === " ") continue;
+      const distance = Math.abs(x + spacing / 2 - beam);
+      const alphabet = "01AF79";
+      const randomFrame = reducedMotion.matches ? 0 : Math.floor(timestamp / 110);
+      const character = confirmed ? caption[index] : alphabet[(randomFrame + index * 3) % alphabet.length];
+      context.fillStyle = colors.green;
+      context.globalAlpha = confirmed ? state.activity === "complete" ? 1 : state.activity === "idle" ? 0.72 : 0.88 : active ? 0.15 + Math.max(0, 1 - distance / 24) * 0.72 : 0;
+      context.shadowColor = colors.green;
+      context.shadowBlur = confirmed && state.activity === "complete" ? 4 : 0;
+      context.fillText(character, x, textLayout.baseline);
+    }
+    context.shadowBlur = 0;
+    context.globalAlpha = 1;
+
+    if (active) {
+      const glow = context.createLinearGradient(beam - 4, 0, beam + 4, 0);
+      glow.addColorStop(0, "transparent");
+      glow.addColorStop(0.5, colors.green);
+      glow.addColorStop(1, "transparent");
+      context.fillStyle = glow;
+      context.globalAlpha = 0.34;
+      context.fillRect(beam - 4, 6, 8, 11);
+      context.globalAlpha = 0.85;
+      context.fillStyle = colors.green;
+      context.shadowBlur = 4;
+      context.shadowColor = colors.green;
+      context.fillRect(beam, 7, 1, 9);
+      context.shadowBlur = 0;
+      context.globalAlpha = 1;
+    }
+    context.restore();
+  }
+
+  function tick(timestamp) {
+    if (!root.isConnected) return;
+    const elapsed = lastTime ? Math.min(100, timestamp - lastTime) : 0;
+    lastTime = timestamp;
+    if (state.activity === "complete" && timestamp >= completeUntil) setActivity("idle");
+    if (!document.hidden) {
+      if (reducedMotion.matches) shownProgress = state.progress;
+      else shownProgress += (state.progress - shownProgress) * (1 - Math.exp(-elapsed / 220));
+      if (Math.abs(shownProgress - state.progress) < 0.05) shownProgress = state.progress;
+      draw(timestamp);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  controls.forEach(button => button.addEventListener("click", () => setActivity(button.dataset.state)));
+  slider.addEventListener("input", () => { state.progress = Number(slider.value); renderState(); });
+  known.addEventListener("change", () => { state.known = known.checked; renderState(); });
+  theme.addEventListener("change", readColors);
+  readColors();
+  renderState();
+  draw(0);
+  requestAnimationFrame(tick);
+  if (globalThis.Tweak) {
+    const tweak = new Tweak({ container: root, onChange: renderState });
+    tweak.addSlider(state, "period", { label: "왕복 주기", min: 1.4, max: 3.6, step: 0.2, unit: "s" });
+  }
+})();
+</script>
